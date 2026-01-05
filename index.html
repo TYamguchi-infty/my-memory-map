@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>記憶の地図 - オフライン対応版</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.3/dist/heic2any.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -36,7 +37,12 @@
             </label>
         </div>
     </div>
-
+    <div id="loading-overlay" class="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center view-hidden">
+        <div class="bg-white p-6 rounded-2xl shadow-xl text-center">
+            <div class="animate-spin h-10 w-10 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+            <p id="loading-text" class="text-gray-700 font-bold">写真を整理中...</p>
+        </div>
+    </div>
     <div id="trip-view" class="h-full w-full flex view-hidden">
         <div class="flex-grow relative bg-[#eef2f6] flex flex-col items-center">
             <div id="word-spawn-area" class="absolute inset-0 overflow-hidden pointer-events-none"></div>
@@ -166,51 +172,76 @@
             } catch (e) { console.warn("AI解析はスキップされました(API Key無効等)"); }
         }
 
-        function handleFileUpload(event) {
+        async function handleFileUpload(event) {
             const files = Array.from(event.target.files);
             if (files.length === 0) return;
+
+            const overlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+            overlay.classList.remove('view-hidden');
 
             let processedCount = 0;
             let lastGroupId = '';
 
-            files.forEach((file) => {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const imgData = e.target.result;
-                    
-                    // EXIF情報の抽出
-                    EXIF.getData(file, function() {
-                        let lat = EXIF.getTag(this, "GPSLatitude");
-                        let lon = EXIF.getTag(this, "GPSLongitude");
-                        let coords = [35.6895, 139.6917]; // デフォルト（東京）
+            for (const file of files) {
+                loadingText.innerText = `${files.length}枚中 ${processedCount + 1}枚目を処理中...`;
+                
+                try {
+                    let targetFile = file;
 
-                        if (lat && lon) {
-                            const toD = (dms, ref) => {
-                                let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
-                                return (ref === "S" || ref === "W" ? res * -1 : res);
-                            };
-                            coords = [toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))];
-                        }
+                    // HEIC形式ならJPEGに変換
+                    if (file.name.toLowerCase().endsWith('.heic')) {
+                        const blob = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.7 });
+                        targetFile = new File([blob], file.name.replace(/\.heic/i, ".jpg"), { type: "image/jpeg" });
+                    }
 
-                        const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
-                        if (!userTrips[gId]) {
-                            userTrips[gId] = { id: gId, name: "新しい旅", coords: coords, thumbnail: imgData, photos: [], states: {} };
-                        }
-                        userTrips[gId].photos.push({ src: imgData });
-                        lastGroupId = gId;
-                        processedCount++;
-
-                        // 全ファイルの処理が終わったら保存して遷移
-                        if (processedCount === files.length) {
-                            localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
-                            renderMarker(lastGroupId, userTrips[lastGroupId], true);
-                            alert("思い出を地図に追加しました！");
-                            diveToTrip(lastGroupId);
-                        }
+                    const imgData = await new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => resolve(e.target.result);
+                        reader.readAsDataURL(targetFile);
                     });
-                };
-                reader.readAsDataURL(file);
-            });
+
+                    // 位置情報の解析
+                    const coords = await new Promise((resolve) => {
+                        EXIF.getData(targetFile, function() {
+                            let lat = EXIF.getTag(this, "GPSLatitude");
+                            let lon = EXIF.getTag(this, "GPSLongitude");
+                            if (lat && lon) {
+                                const toD = (dms, ref) => {
+                                    let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
+                                    return (ref === "S" || ref === "W" ? res * -1 : res);
+                                };
+                                resolve([toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))]);
+                            } else {
+                                // 位置情報がない場合はデフォルト（または現在地）
+                                resolve([35.6895 + (Math.random()*0.1), 139.6917 + (Math.random()*0.1)]); 
+                            }
+                        });
+                    });
+
+                    const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
+                    if (!userTrips[gId]) {
+                        userTrips[gId] = { id: gId, name: "新しい旅", coords: coords, thumbnail: imgData, photos: [], states: {} };
+                    }
+                    userTrips[gId].photos.push({ src: imgData });
+                    lastGroupId = gId;
+                    processedCount++;
+
+                } catch (err) {
+                    console.error("ファイル処理エラー:", err);
+                }
+            }
+
+            // すべての処理が完了
+            if (processedCount > 0) {
+                localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
+                renderMarker(lastGroupId, userTrips[lastGroupId], true);
+                overlay.classList.add('view-hidden');
+                diveToTrip(lastGroupId);
+            } else {
+                overlay.classList.add('view-hidden');
+                alert("写真の処理に失敗しました。");
+            }
         }
 
         function goBackToPreviousPhoto() {
