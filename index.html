@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>記憶の地図 - 完全版</title>
+    <title>記憶の地図 - オフライン対応版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -27,7 +27,7 @@
     <div id="home-view" class="h-full w-full relative">
         <div id="map"></div>
         <div class="absolute top-10 left-1/2 -translate-x-1/2 z-[1000]">
-            <h1 class="text-3xl font-bold bg-white/80 px-8 py-3 rounded-full backdrop-blur-sm shadow-md">記憶の地図</h1>
+            <h1 class="text-3xl font-bold bg-white/80 px-8 py-3 rounded-full backdrop-blur-sm shadow-md text-gray-800">記憶の地図</h1>
         </div>
         <div class="absolute bottom-10 right-10 z-[1000]">
             <label class="bg-blue-600 hover:bg-blue-700 text-white p-5 rounded-full shadow-2xl cursor-pointer flex items-center justify-center w-16 h-16 transition-transform active:scale-90">
@@ -58,7 +58,7 @@
             </div>
             
             <div class="p-6 flex flex-col gap-4 items-center border-b">
-                <button onclick="updateCaptionFromAI()" id="update-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-3 rounded-xl shadow-lg transition-all opacity-0 pointer-events-none">
+                <button id="update-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-3 rounded-xl shadow-lg transition-all opacity-0 pointer-events-none">
                     <span id="update-btn-text">更新する</span>
                 </button>
                 
@@ -82,23 +82,21 @@
     </div>
 
     <script>
-        // ★ここに必ずAPIキーを入れてください
-        const OPENAI_API_KEY = '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';
+        // APIキーが無効な場合でも基本機能は動作します
+        const OPENAI_API_KEY = ''; 
 
         let map, currentTrip = '', currentPhotoSrc = '';
-        let photoHistoryStack = []; // 戻るボタン用の履歴
-
+        let photoHistoryStack = [];
         let tripHistory = {
             ise: { name: "伊勢", coords: [34.4912, 136.7099], thumbnail: 'ise1.jpg', photos: [{src: 'ise1.jpg'},{src: 'ise2.jpg'},{src: 'ise3.jpg'}], states: {} },
             nikko: { name: "日光", coords: [36.7481, 139.6102], thumbnail: 'nikko1.jpg', photos: [{src: 'nikko1.jpg'},{src: 'nikko2.jpg'},{src: 'nikko3.jpg'}], states: {} }
         };
-
         let userTrips = JSON.parse(localStorage.getItem('USER_TRIPS')) || {};
 
         window.onload = () => { initMap(); };
 
         function initMap() {
-            map = L.map('map', { zoomControl: false }).setView([36.5, 137.5], 6);
+            map = L.map('map', { zoomControl: false }).setView([36.5, 137.5], 5);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
             Object.keys(tripHistory).forEach(id => renderMarker(id, tripHistory[id]));
             Object.keys(userTrips).forEach(id => renderMarker(id, userTrips[id], true));
@@ -109,20 +107,19 @@
                 className: 'custom-icon',
                 html: `<div class="map-photo-marker" onclick="diveToTrip('${id}')">
                         <img src="${trip.thumbnail}">
-                        <div class="text-[10px] text-center font-bold ${isUser ? 'text-blue-600' : ''}">${trip.name}</div>
+                        <div class="text-[10px] text-center font-bold ${isUser ? 'text-blue-600' : 'text-gray-500'}">${trip.name}</div>
                       </div>`,
                 iconSize: [100, 90]
             });
             L.marker(trip.coords, {icon: icon}).addTo(map);
         }
 
-        async function diveToTrip(tripId) {
+        function diveToTrip(tripId) {
             currentTrip = tripId;
             const trip = { ...tripHistory, ...userTrips }[tripId];
             document.getElementById('home-view').classList.add('view-hidden');
             document.getElementById('trip-view').classList.remove('view-hidden');
             document.getElementById('delete-btn').classList.toggle('hidden', !tripId.startsWith('user_'));
-            
             renderHand(trip);
             selectPhoto(trip.photos[0].src);
         }
@@ -132,8 +129,8 @@
             currentPhotoSrc = src;
             const trip = { ...tripHistory, ...userTrips }[currentTrip];
             if (!trip.states[src]) {
-                trip.states[src] = { caption: "解析中...", keywords: [], visionSummary: "", welcome: "写真を見ています..." };
-                analyzeImage(src);
+                trip.states[src] = { caption: "思い出の一枚", keywords: [], visionSummary: "", welcome: "この写真について教えてください。" };
+                if (OPENAI_API_KEY) analyzeImage(src);
             }
             updateUI(trip.states[src]);
             document.getElementById('display-img').src = src;
@@ -149,7 +146,6 @@
         }
 
         async function analyzeImage(src) {
-            if (!OPENAI_API_KEY.startsWith('sk-')) return;
             try {
                 const response = await fetch('https://api.openai.com/v1/chat/completions', {
                     method: 'POST',
@@ -160,72 +156,61 @@
                         { role: "user", content: [{ type: "text", text: "解析して" }, { type: "image_url", image_url: { url: src } }] }]
                     })
                 });
+                if (!response.ok) throw new Error('API Error');
                 const data = await response.json();
                 const res = data.choices[0].message.content.split('/');
                 const state = { ...tripHistory, ...userTrips }[currentTrip].states[src];
-                state.caption = res[1]?.replace('caption:', '').trim();
-                state.welcome = res[2]?.replace('welcome:', '').trim();
+                state.caption = res[1]?.replace('caption:', '').trim() || state.caption;
+                state.welcome = res[2]?.replace('welcome:', '').trim() || state.welcome;
                 if (currentPhotoSrc === src) updateUI(state);
-            } catch (e) { console.error(e); }
+            } catch (e) { console.warn("AI解析はスキップされました(API Key無効等)"); }
         }
 
-        // --- 修正版：ファイルアップロード & 位置情報処理 ---
-        async function handleFileUpload(event) {
-            const files = Array.from(event.target.files).slice(0, 10);
+        function handleFileUpload(event) {
+            const files = Array.from(event.target.files);
             if (files.length === 0) return;
 
-            alert(`${files.length}枚の写真を読み込みます。位置情報を解析中...`);
+            let processedCount = 0;
+            let lastGroupId = '';
 
-            for (const file of files) {
-                // Promiseを使って、1枚ごとの読み込みとEXIF解析が終わるまで待機させる
-                await new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        const imgData = e.target.result;
-                        
-                        // EXIFの解析
-                        EXIF.getData(file, function() {
-                            let lat = EXIF.getTag(this, "GPSLatitude");
-                            let lon = EXIF.getTag(this, "GPSLongitude");
-                            let coords = [35.6895, 139.6917]; // デフォルト（東京）
+            files.forEach((file) => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const imgData = e.target.result;
+                    
+                    // EXIF情報の抽出
+                    EXIF.getData(file, function() {
+                        let lat = EXIF.getTag(this, "GPSLatitude");
+                        let lon = EXIF.getTag(this, "GPSLongitude");
+                        let coords = [35.6895, 139.6917]; // デフォルト（東京）
 
-                            if (lat && lon) {
-                                const toD = (dms, ref) => (dms[0] + dms[1]/60 + dms[2]/3600) * (ref === "S" || ref === "W" ? -1 : 1);
-                                coords = [toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))];
-                                console.log("位置情報を取得しました:", coords);
-                            } else {
-                                console.warn("位置情報が含まれていない写真です。");
-                            }
+                        if (lat && lon) {
+                            const toD = (dms, ref) => {
+                                let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
+                                return (ref === "S" || ref === "W" ? res * -1 : res);
+                            };
+                            coords = [toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))];
+                        }
 
-                            // グループIDの作成
-                            const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
-                            
-                            if (!userTrips[gId]) {
-                                userTrips[gId] = { 
-                                    id: gId, 
-                                    name: "自分の旅", 
-                                    coords: coords, 
-                                    thumbnail: imgData, 
-                                    photos: [], 
-                                    states: {} 
-                                };
-                            }
-                            userTrips[gId].photos.push({ src: imgData });
-                            
-                            // 保存
+                        const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
+                        if (!userTrips[gId]) {
+                            userTrips[gId] = { id: gId, name: "新しい旅", coords: coords, thumbnail: imgData, photos: [], states: {} };
+                        }
+                        userTrips[gId].photos.push({ src: imgData });
+                        lastGroupId = gId;
+                        processedCount++;
+
+                        // 全ファイルの処理が終わったら保存して遷移
+                        if (processedCount === files.length) {
                             localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
-                            
-                            // 最後の1枚だったら地図に反映してダイブ
-                            if (file === files[files.length - 1]) {
-                                renderMarker(gId, userTrips[gId], true);
-                                diveToTrip(gId);
-                            }
-                            resolve(); // このファイルの処理を終了
-                        });
-                    };
-                    reader.readAsDataURL(file);
-                });
-            }
+                            renderMarker(lastGroupId, userTrips[lastGroupId], true);
+                            alert("思い出を地図に追加しました！");
+                            diveToTrip(lastGroupId);
+                        }
+                    });
+                };
+                reader.readAsDataURL(file);
+            });
         }
 
         function goBackToPreviousPhoto() {
@@ -240,8 +225,9 @@
             }
         }
 
-        // --- 会話機能 ---
+        // --- 会話機能 (APIキー有効時のみ) ---
         async function askAI(text) {
+            if (!OPENAI_API_KEY) return;
             const state = { ...tripHistory, ...userTrips }[currentTrip].states[currentPhotoSrc];
             try {
                 const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -272,10 +258,9 @@
                     document.getElementById('update-btn-text').innerText = `「${memo}」に更新`;
                     btn.onclick = () => { document.getElementById('display-caption').innerText = memo; state.caption = memo; btn.classList.add('opacity-0'); };
                 }
-            } catch (e) { console.error(e); }
+            } catch (e) { console.warn("AI Reply Error"); }
         }
 
-        // その他UI制御
         let isRec = false, rec = ('webkitSpeechRecognition' in window) ? new webkitSpeechRecognition() : null;
         if(rec) { rec.continuous = true; rec.onresult = (e) => askAI(e.results[e.results.length-1][0].transcript); }
         function toggleSpeechRecognition() {
@@ -283,6 +268,7 @@
             isRec ? rec.stop() : rec.start(); isRec = !isRec;
             document.getElementById('mic-btn').classList.toggle('mic-active', isRec);
         }
+
         function renderHand(trip) {
             const area = document.getElementById('hand-area'); area.innerHTML = '';
             trip.photos.forEach(p => {
@@ -293,6 +279,7 @@
                 area.appendChild(card);
             });
         }
+
         function updateWordCloud(word) {
             const container = document.getElementById('word-cloud-container');
             if ([...container.children].some(c => c.innerText === word)) return;
@@ -300,6 +287,7 @@
             span.className = "floating text-sm text-blue-500 bg-white px-3 py-1 rounded-full shadow-sm border border-blue-50";
             span.innerText = word; container.appendChild(span);
         }
+
         function confirmGoHome() { if(confirm("地図に戻りますか？")) location.reload(); }
         function showHand() { document.getElementById('hand-area').classList.replace('hand-hidden', 'hand-visible'); }
         function hideHandIfSelected() { document.getElementById('hand-area').classList.replace('hand-visible', 'hand-hidden'); }
