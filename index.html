@@ -169,72 +169,64 @@
             } catch (e) { console.error(e); }
         }
 
+        // --- 修正版：ファイルアップロード & 位置情報処理 ---
         async function handleFileUpload(event) {
-    const files = Array.from(event.target.files);
-    if (files.length === 0) return;
+            const files = Array.from(event.target.files).slice(0, 10);
+            if (files.length === 0) return;
 
-    alert(`${files.length}枚の写真を読み込みます。位置情報を解析中...`);
+            alert(`${files.length}枚の写真を読み込みます。位置情報を解析中...`);
 
-    for (const file of files) {
-        try {
-            // 1. ファイルをBase64として読み込む
-            const imgData = await new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
-                reader.readAsDataURL(file);
-            });
+            for (const file of files) {
+                // Promiseを使って、1枚ごとの読み込みとEXIF解析が終わるまで待機させる
+                await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const imgData = e.target.result;
+                        
+                        // EXIFの解析
+                        EXIF.getData(file, function() {
+                            let lat = EXIF.getTag(this, "GPSLatitude");
+                            let lon = EXIF.getTag(this, "GPSLongitude");
+                            let coords = [35.6895, 139.6917]; // デフォルト（東京）
 
-            // 2. EXIF（位置情報）を抽出する
-            const coords = await new Promise((resolve) => {
-                EXIF.getData(file, function() {
-                    let lat = EXIF.getTag(this, "GPSLatitude");
-                    let lon = EXIF.getTag(this, "GPSLongitude");
-                    let latRef = EXIF.getTag(this, "GPSLatitudeRef");
-                    let lonRef = EXIF.getTag(this, "GPSLongitudeRef");
+                            if (lat && lon) {
+                                const toD = (dms, ref) => (dms[0] + dms[1]/60 + dms[2]/3600) * (ref === "S" || ref === "W" ? -1 : 1);
+                                coords = [toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))];
+                                console.log("位置情報を取得しました:", coords);
+                            } else {
+                                console.warn("位置情報が含まれていない写真です。");
+                            }
 
-                    if (lat && lon) {
-                        const toDec = (dms, ref) => {
-                            let res = dms[0] + dms[1]/60 + dms[2]/3600;
-                            return (ref === "S" || ref === "W") ? res * -1 : res;
-                        };
-                        resolve([toDec(lat, latRef), toDec(lon, lonRef)]);
-                    } else {
-                        // 位置情報がない場合は、日本の中心付近に少しずらして配置（重ならないように）
-                        resolve([35.6895 + (Math.random() * 0.1), 139.6917 + (Math.random() * 0.1)]);
-                    }
+                            // グループIDの作成
+                            const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
+                            
+                            if (!userTrips[gId]) {
+                                userTrips[gId] = { 
+                                    id: gId, 
+                                    name: "自分の旅", 
+                                    coords: coords, 
+                                    thumbnail: imgData, 
+                                    photos: [], 
+                                    states: {} 
+                                };
+                            }
+                            userTrips[gId].photos.push({ src: imgData });
+                            
+                            // 保存
+                            localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
+                            
+                            // 最後の1枚だったら地図に反映してダイブ
+                            if (file === files[files.length - 1]) {
+                                renderMarker(gId, userTrips[gId], true);
+                                diveToTrip(gId);
+                            }
+                            resolve(); // このファイルの処理を終了
+                        });
+                    };
+                    reader.readAsDataURL(file);
                 });
-            });
-
-            // 3. データの登録
-            const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
-            if (!userTrips[gId]) {
-                userTrips[gId] = { 
-                    id: gId, 
-                    name: "自分の旅", 
-                    coords: coords, 
-                    thumbnail: imgData, 
-                    photos: [], 
-                    states: {} 
-                };
             }
-            userTrips[gId].photos.push({ src: imgData });
-            
-            // ローカルストレージに保存
-            localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
-            
-            // 地図にピンを追加
-            renderMarker(gId, userTrips[gId], true);
-
-            // 最後の写真ならその場所にダイブする
-            if (file === files[files.length - 1]) {
-                diveToTrip(gId);
-            }
-
-        } catch (err) {
-            console.error("ファイル処理エラー:", err);
         }
-    }
-}
 
         function goBackToPreviousPhoto() {
             if (photoHistoryStack.length > 0) selectPhoto(photoHistoryStack.pop());
@@ -313,5 +305,4 @@
         function hideHandIfSelected() { document.getElementById('hand-area').classList.replace('hand-visible', 'hand-hidden'); }
     </script>
 </body>
-
 </html>
