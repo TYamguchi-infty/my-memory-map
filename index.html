@@ -114,7 +114,7 @@
                 html: `<div class="map-photo-marker" onclick="diveToTrip('${id}')">
                         <img src="${trip.thumbnail}">
                         <div class="text-[10px] text-center font-bold ${isUser ? 'text-blue-600' : 'text-gray-500'}">${trip.name}</div>
-                      </div>`,
+                    </div>`,
                 iconSize: [100, 90]
             });
             L.marker(trip.coords, {icon: icon}).addTo(map);
@@ -172,7 +172,34 @@
             } catch (e) { console.warn("AI解析はスキップされました(API Key無効等)"); }
         }
 
-        // --- 統合・修正された画像アップロード処理 ---
+        // --- 画像リサイズ用のヘルパー関数 (重要：これがないと動きません) ---
+        function resizeImage(blob, maxWidth) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                const url = URL.createObjectURL(blob);
+                img.onload = () => {
+                    URL.revokeObjectURL(url);
+                    let width = img.width;
+                    let height = img.height;
+                    if (width > maxWidth) {
+                        height = Math.round((height * maxWidth) / width);
+                        width = maxWidth;
+                    }
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.7)); 
+                };
+                img.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error("Image Load Error"));
+                };
+                img.src = url;
+            });
+        }
+
         async function handleFileUpload(event) {
             const files = Array.from(event.target.files);
             if (files.length === 0) return;
@@ -191,7 +218,7 @@
                     let targetBlob = file;
                     const fileName = file.name.toLowerCase();
 
-                    // 1. HEIC/HEIF 変換 (iPhone対策)
+                    // 1. HEIC/HEIF 変換
                     if (fileName.endsWith('.heic') || fileName.endsWith('.heif')) {
                         try {
                             const converted = await heic2any({ 
@@ -201,16 +228,16 @@
                             });
                             targetBlob = Array.isArray(converted) ? converted[0] : converted;
                         } catch (e) {
-                            console.warn("HEIC変換失敗、スキップします:", e);
+                            console.warn("HEIC変換失敗:", e);
                             continue;
                         }
                     }
 
-                    // 2. 位置情報の抽出 (リサイズ前のオリジナルBlobから取得)
+                    // 2. 位置情報の抽出 (Promise化して確実に待機)
                     const coords = await new Promise((resolve) => {
                         EXIF.getData(targetBlob, function() {
-                            let lat = EXIF.getTag(this, "GPSLatitude");
-                            let lon = EXIF.getTag(this, "GPSLongitude");
+                            const lat = EXIF.getTag(this, "GPSLatitude");
+                            const lon = EXIF.getTag(this, "GPSLongitude");
                             if (lat && lon) {
                                 const toD = (dms, ref) => {
                                     let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
@@ -218,14 +245,12 @@
                                 };
                                 resolve([toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))]);
                             } else {
-                                // 位置情報がない場合は少し散らして配置
                                 resolve([35.68 + (Math.random()*0.1), 139.69 + (Math.random()*0.1)]); 
                             }
                         });
                     });
 
-                    // 3. 画像のリサイズ (メモリ節約 & localStorage容量対策)
-                    // 長辺を1000px程度に抑えることで、iPhoneでも複数枚保存可能になります
+                    // 3. 画像のリサイズ
                     const resizedDataUrl = await resizeImage(targetBlob, 1000);
 
                     const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
@@ -234,7 +259,7 @@
                             id: gId, 
                             name: "新しい旅", 
                             coords: coords, 
-                            thumbnail: resizedDataUrl, // 軽量化した画像を使用
+                            thumbnail: resizedDataUrl, 
                             photos: [], 
                             states: {} 
                         };
@@ -253,9 +278,7 @@
             if (processedCount > 0) {
                 try {
                     localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
-                    renderMarker(lastGroupId, userTrips[lastGroupId], true);
-                    alert(`${processedCount}枚追加しました`);
-                    diveToTrip(lastGroupId);
+                    location.reload(); // 確実にマーカーを再描画するためにリロード
                 } catch (e) {
                     alert("保存容量がいっぱいです。不要な記録を削除してください。");
                 }
@@ -276,7 +299,6 @@
             }
         }
 
-        // --- 会話機能 (APIキー有効時のみ) ---
         async function askAI(text) {
             if (!OPENAI_API_KEY) return;
             const state = { ...tripHistory, ...userTrips }[currentTrip].states[currentPhotoSrc];
