@@ -2,93 +2,110 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>記憶の地図 - オフライン対応版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>記憶の地図 - マルチデバイス対応版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.3/dist/heic2any.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
+        /* iOSのツールバー対策: 動的な高さを取得 */
+        :root { --app-height: 100dvh; }
+        body { height: var(--app-height); overflow: hidden; }
+
         .view-hidden { display: none !important; }
         #map { width: 100%; height: 100%; background: #eef2f6; z-index: 10; }
-        .map-photo-marker { background: white; padding: 4px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); border: 2px solid white; cursor: pointer; width: 100px !important; }
-        .map-photo-marker img { width: 100%; height: 70px; object-fit: cover; border-radius: 4px; }
-        #hand-area { transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
-        .hand-hidden { transform: translateY(85%); }
+        
+        /* マーカーを少し小さくしてスマホでの視認性を向上 */
+        .map-photo-marker { background: white; padding: 2px; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); border: 2px solid white; cursor: pointer; width: 80px !important; }
+        .map-photo-marker img { width: 100%; height: 50px; object-fit: cover; border-radius: 3px; }
+        .map-photo-marker div { font-size: 9px; text-align: center; font-weight: bold; overflow: hidden; white-space: nowrap; }
+
+        /* 写真一覧（手札）のアニメーション */
+        #hand-area { transition: transform 0.4s ease-out; }
+        .hand-hidden { transform: translateY(80%); }
         .hand-visible { transform: translateY(0); }
+
         .floating { animation: float 3s ease-in-out infinite; }
         @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+        
         .mic-active { animation: pulse 1.5s infinite; background-color: #ef4444 !important; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 20px 10px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 15px 8px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+
+        /* スクロールバー非表示 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
     </style>
 </head>
-<body class="bg-[#f8f9fa] h-screen overflow-hidden">
+<body class="bg-[#f8f9fa]">
 
     <div id="home-view" class="h-full w-full relative">
         <div id="map"></div>
-        <div class="absolute top-10 left-1/2 -translate-x-1/2 z-[1000]">
-            <h1 class="text-3xl font-bold bg-white/80 px-8 py-3 rounded-full backdrop-blur-sm shadow-md text-gray-800">記憶の地図</h1>
+        <div class="absolute top-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-4 text-center">
+            <h1 class="inline-block text-xl md:text-3xl font-bold bg-white/90 px-6 py-2 rounded-full shadow-md text-gray-800 backdrop-blur-sm">記憶の地図</h1>
         </div>
-        <div class="absolute bottom-10 right-10 z-[1000]">
-            <label class="bg-blue-600 hover:bg-blue-700 text-white p-5 rounded-full shadow-2xl cursor-pointer flex items-center justify-center w-16 h-16 transition-transform active:scale-90">
-                <span class="text-3xl">+</span>
+        <div class="absolute bottom-8 right-8 z-[1000]">
+            <label class="bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-2xl cursor-pointer flex items-center justify-center w-14 h-14 md:w-16 md:h-16 active:scale-90 transition-transform">
+                <span class="text-2xl">+</span>
                 <input type="file" id="photo-upload" multiple accept="image/*" class="hidden" onchange="handleFileUpload(event)">
             </label>
         </div>
     </div>
-    <div id="loading-overlay" class="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center view-hidden">
-        <div class="bg-white p-6 rounded-2xl shadow-xl text-center">
+
+    <div id="loading-overlay" class="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center view-hidden p-6">
+        <div class="bg-white p-8 rounded-2xl shadow-xl text-center max-w-xs w-full">
             <div class="animate-spin h-10 w-10 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
             <p id="loading-text" class="text-gray-700 font-bold">写真を整理中...</p>
         </div>
     </div>
-    <div id="trip-view" class="h-full w-full flex view-hidden">
-        <div class="flex-grow relative bg-[#eef2f6] flex flex-col items-center">
+
+    <div id="trip-view" class="h-full w-full flex flex-col md:flex-row view-hidden">
+        
+        <div class="flex-grow relative bg-[#eef2f6] flex flex-col items-center justify-center overflow-hidden h-3/5 md:h-full">
             <div id="word-spawn-area" class="absolute inset-0 overflow-hidden pointer-events-none"></div>
-            <div class="flex-grow flex items-center justify-center w-full p-4">
-                <div id="main-photo-container" class="z-10 bg-white p-4 shadow-2xl rounded-2xl max-w-2xl text-center">
-                    <img id="display-img" src="" class="rounded-lg w-full h-auto max-h-[50vh] object-cover">
-                    <p id="display-caption" class="mt-4 text-xl font-bold italic text-gray-700 px-4"></p>
-                </div>
+            
+            <div class="z-10 bg-white p-2 md:p-4 shadow-xl rounded-2xl mx-4 max-w-[90%] md:max-w-2xl text-center">
+                <img id="display-img" src="" class="rounded-lg w-full h-auto max-h-[30dvh] md:max-h-[60dvh] object-cover">
+                <p id="display-caption" class="mt-2 md:mt-4 text-base md:text-xl font-bold italic text-gray-700 px-2"></p>
             </div>
-            <div id="hand-container" class="absolute bottom-0 left-0 right-0 h-48 flex items-end justify-center z-20" onmouseenter="showHand()" onmouseleave="hideHandIfSelected()">
-                <div id="hand-area" class="flex justify-center -space-x-4 px-10 pb-6 hand-hidden pointer-events-auto"></div>
+
+            <div id="hand-container" class="absolute bottom-0 left-0 right-0 h-32 md:h-48 flex items-end justify-center z-20 overflow-hidden" 
+                 onclick="toggleHand()" onmouseenter="showHand()" onmouseleave="hideHandIfSelected()">
+                <div id="hand-area" class="flex justify-start md:justify-center -space-x-6 md:-space-x-4 px-10 pb-4 hand-hidden no-scrollbar overflow-x-auto w-full"></div>
             </div>
         </div>
 
-        <div class="w-80 lg:w-[380px] bg-white flex flex-col shadow-2xl z-30 h-full">
-            <div class="h-[35vh] p-6 overflow-y-auto bg-gray-50/50 border-b">
-                <h3 class="text-gray-400 text-[10px] tracking-widest uppercase mb-4 font-bold">会話から拾った言葉</h3>
+        <div class="w-full md:w-80 lg:w-[380px] bg-white flex flex-col shadow-2xl z-30 h-2/5 md:h-full border-t md:border-t-0 md:border-l">
+            <div class="flex-grow p-4 md:p-6 overflow-y-auto bg-gray-50/50 border-b no-scrollbar">
+                <h3 class="text-gray-400 text-[10px] tracking-widest uppercase mb-2 font-bold">会話から拾った言葉</h3>
                 <div id="word-cloud-container" class="flex flex-wrap gap-2"></div>
             </div>
             
-            <div class="p-6 flex flex-col gap-4 items-center border-b">
-                <button id="update-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-3 rounded-xl shadow-lg transition-all opacity-0 pointer-events-none">
+            <div class="p-4 md:p-6 flex flex-col gap-3 md:gap-4 items-center">
+                <button id="update-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs md:text-sm font-bold py-2 md:py-3 rounded-xl shadow-lg transition-all opacity-0 pointer-events-none">
                     <span id="update-btn-text">更新する</span>
                 </button>
                 
-                <div class="flex gap-4 items-center justify-center">
-                    <button onclick="confirmGoHome()" class="bg-white border border-gray-200 text-gray-500 w-12 h-12 rounded-full shadow-sm hover:bg-gray-50 flex items-center justify-center">🏠</button>
-                    <button onclick="goBackToPreviousPhoto()" class="bg-white border border-gray-200 text-gray-500 w-12 h-12 rounded-full shadow-sm hover:bg-gray-50 flex items-center justify-center text-xl">⬅️</button>
-                    <button id="mic-btn" onclick="toggleSpeechRecognition()" class="bg-red-500 text-white w-24 h-24 rounded-full shadow-xl flex flex-col items-center justify-center">
-                        <span class="text-3xl mb-1">🎤</span>
-                        <span class="text-[9px] font-black uppercase">話す</span>
+                <div class="flex gap-4 md:gap-6 items-center justify-center">
+                    <button onclick="confirmGoHome()" class="bg-white border border-gray-200 text-lg w-10 h-10 md:w-12 md:h-12 rounded-full shadow-sm flex items-center justify-center">🏠</button>
+                    <button id="mic-btn" onclick="toggleSpeechRecognition()" class="bg-red-500 text-white w-20 h-20 md:w-24 md:h-24 rounded-full shadow-xl flex flex-col items-center justify-center active:scale-95 transition-transform">
+                        <span class="text-2xl md:text-3xl mb-1">🎤</span>
+                        <span class="text-[8px] md:text-[9px] font-black uppercase">話す</span>
                     </button>
-                    <button id="delete-btn" onclick="deleteCurrentTrip()" class="bg-white border border-red-100 text-red-400 w-12 h-12 rounded-full shadow-sm hover:bg-red-50 flex items-center justify-center hidden">🗑️</button>
+                    <button onclick="goBackToPreviousPhoto()" class="bg-white border border-gray-200 text-lg w-10 h-10 md:w-12 md:h-12 rounded-full shadow-sm flex items-center justify-center text-xl">⬅️</button>
+                    <button id="delete-btn" onclick="deleteCurrentTrip()" class="bg-white border border-red-100 text-red-400 w-10 h-10 rounded-full shadow-sm flex items-center justify-center hidden">🗑️</button>
                 </div>
             </div>
 
-            <div class="mt-auto p-6 bg-white">
-                <div class="w-full bg-blue-50 p-5 rounded-2xl border border-blue-100 min-h-[120px] flex items-center text-center">
-                    <p id="ai-response-text" class="text-blue-900 text-sm font-medium leading-relaxed italic w-full"></p>
+            <div class="p-4 md:p-6 bg-white border-t">
+                <div class="w-full bg-blue-50 p-3 md:p-5 rounded-2xl border border-blue-100 min-h-[80px] md:min-h-[120px] flex items-center text-center">
+                    <p id="ai-response-text" class="text-blue-900 text-xs md:text-sm font-medium leading-relaxed italic w-full"></p>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        // APIキーが無効な場合でも基本機能は動作します
         const OPENAI_API_KEY = ''; 
 
         let map, currentTrip = '', currentPhotoSrc = '';
@@ -113,9 +130,9 @@
                 className: 'custom-icon',
                 html: `<div class="map-photo-marker" onclick="diveToTrip('${id}')">
                         <img src="${trip.thumbnail}">
-                        <div class="text-[10px] text-center font-bold ${isUser ? 'text-blue-600' : 'text-gray-500'}">${trip.name}</div>
-                    </div>`,
-                iconSize: [100, 90]
+                        <div>${trip.name}</div>
+                      </div>`,
+                iconSize: [80, 75]
             });
             L.marker(trip.coords, {icon: icon}).addTo(map);
         }
@@ -162,39 +179,28 @@
                         { role: "user", content: [{ type: "text", text: "解析して" }, { type: "image_url", image_url: { url: src } }] }]
                     })
                 });
-                if (!response.ok) throw new Error('API Error');
                 const data = await response.json();
                 const res = data.choices[0].message.content.split('/');
                 const state = { ...tripHistory, ...userTrips }[currentTrip].states[src];
                 state.caption = res[1]?.replace('caption:', '').trim() || state.caption;
                 state.welcome = res[2]?.replace('welcome:', '').trim() || state.welcome;
                 if (currentPhotoSrc === src) updateUI(state);
-            } catch (e) { console.warn("AI解析はスキップされました(API Key無効等)"); }
+            } catch (e) { console.warn("AI解析はスキップされました"); }
         }
 
-        // --- 画像リサイズ用のヘルパー関数 (重要：これがないと動きません) ---
         function resizeImage(blob, maxWidth) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
                 const url = URL.createObjectURL(blob);
                 img.onload = () => {
                     URL.revokeObjectURL(url);
-                    let width = img.width;
-                    let height = img.height;
-                    if (width > maxWidth) {
-                        height = Math.round((height * maxWidth) / width);
-                        width = maxWidth;
-                    }
+                    let width = img.width, height = img.height;
+                    if (width > maxWidth) { height = Math.round((height * maxWidth) / width); width = maxWidth; }
                     const canvas = document.createElement('canvas');
-                    canvas.width = width;
-                    canvas.height = height;
+                    canvas.width = width; canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    resolve(canvas.toDataURL('image/jpeg', 0.7)); 
-                };
-                img.onerror = () => {
-                    URL.revokeObjectURL(url);
-                    reject(new Error("Image Load Error"));
+                    resolve(canvas.toDataURL('image/jpeg', 0.6)); 
                 };
                 img.src = url;
             });
@@ -203,41 +209,21 @@
         async function handleFileUpload(event) {
             const files = Array.from(event.target.files);
             if (files.length === 0) return;
-
             const overlay = document.getElementById('loading-overlay');
-            const loadingText = document.getElementById('loading-text');
             overlay.classList.remove('view-hidden');
-
-            let processedCount = 0;
-            let lastGroupId = '';
+            let processedCount = 0, lastGroupId = '';
 
             for (const file of files) {
-                loadingText.innerText = `${files.length}枚中 ${processedCount + 1}枚目を処理中...`;
-                
                 try {
                     let targetBlob = file;
-                    const fileName = file.name.toLowerCase();
-
-                    // 1. HEIC/HEIF 変換
-                    if (fileName.endsWith('.heic') || fileName.endsWith('.heif')) {
-                        try {
-                            const converted = await heic2any({ 
-                                blob: file, 
-                                toType: "image/jpeg", 
-                                quality: 0.6 
-                            });
-                            targetBlob = Array.isArray(converted) ? converted[0] : converted;
-                        } catch (e) {
-                            console.warn("HEIC変換失敗:", e);
-                            continue;
-                        }
+                    if (file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif')) {
+                        const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.5 });
+                        targetBlob = Array.isArray(converted) ? converted[0] : converted;
                     }
 
-                    // 2. 位置情報の抽出 (Promise化して確実に待機)
                     const coords = await new Promise((resolve) => {
                         EXIF.getData(targetBlob, function() {
-                            const lat = EXIF.getTag(this, "GPSLatitude");
-                            const lon = EXIF.getTag(this, "GPSLongitude");
+                            const lat = EXIF.getTag(this, "GPSLatitude"), lon = EXIF.getTag(this, "GPSLongitude");
                             if (lat && lon) {
                                 const toD = (dms, ref) => {
                                     let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
@@ -250,52 +236,22 @@
                         });
                     });
 
-                    // 3. 画像のリサイズ
                     const resizedDataUrl = await resizeImage(targetBlob, 1000);
-
                     const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
                     if (!userTrips[gId]) {
-                        userTrips[gId] = { 
-                            id: gId, 
-                            name: "新しい旅", 
-                            coords: coords, 
-                            thumbnail: resizedDataUrl, 
-                            photos: [], 
-                            states: {} 
-                        };
+                        userTrips[gId] = { id: gId, name: "新しい旅", coords: coords, thumbnail: resizedDataUrl, photos: [], states: {} };
                     }
                     userTrips[gId].photos.push({ src: resizedDataUrl });
-                    lastGroupId = gId;
-                    processedCount++;
-
-                } catch (err) {
-                    console.error("個別処理失敗:", err);
-                }
+                    lastGroupId = gId; processedCount++;
+                } catch (err) { console.error(err); }
             }
 
             overlay.classList.add('view-hidden');
-
             if (processedCount > 0) {
-                try {
-                    localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
-                    location.reload(); // 確実にマーカーを再描画するためにリロード
-                } catch (e) {
-                    alert("保存容量がいっぱいです。不要な記録を削除してください。");
-                }
-            } else {
-                alert("読み込みに失敗しました。");
-            }
-        }
-
-        function goBackToPreviousPhoto() {
-            if (photoHistoryStack.length > 0) selectPhoto(photoHistoryStack.pop());
-        }
-
-        function deleteCurrentTrip() {
-            if (confirm("この記録を削除しますか？")) {
-                delete userTrips[currentTrip];
                 localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
                 location.reload();
+            } else {
+                alert("読み込みに失敗しました。");
             }
         }
 
@@ -346,9 +302,9 @@
             const area = document.getElementById('hand-area'); area.innerHTML = '';
             trip.photos.forEach(p => {
                 const card = document.createElement('div');
-                card.className = "w-32 h-44 bg-white p-2 shadow-lg rounded-md cursor-pointer hover:scale-110 transition-transform flex-shrink-0";
-                card.onclick = () => selectPhoto(p.src);
-                card.innerHTML = `<img src="${p.src}" class="h-32 w-full object-cover rounded">`;
+                card.className = "w-24 md:w-32 h-32 md:h-44 bg-white p-2 shadow-lg rounded-md cursor-pointer hover:scale-110 transition-transform flex-shrink-0";
+                card.onclick = (e) => { e.stopPropagation(); selectPhoto(p.src); };
+                card.innerHTML = `<img src="${p.src}" class="h-20 md:h-32 w-full object-cover rounded">`;
                 area.appendChild(card);
             });
         }
@@ -357,13 +313,18 @@
             const container = document.getElementById('word-cloud-container');
             if ([...container.children].some(c => c.innerText === word)) return;
             const span = document.createElement('span');
-            span.className = "floating text-sm text-blue-500 bg-white px-3 py-1 rounded-full shadow-sm border border-blue-50";
+            span.className = "floating text-xs md:text-sm text-blue-500 bg-white px-3 py-1 rounded-full shadow-sm border border-blue-50";
             span.innerText = word; container.appendChild(span);
         }
 
         function confirmGoHome() { if(confirm("地図に戻りますか？")) location.reload(); }
+        
+        let handVisible = false;
+        function toggleHand() { if(window.innerWidth < 768) { handVisible ? hideHandIfSelected() : showHand(); handVisible = !handVisible; } }
         function showHand() { document.getElementById('hand-area').classList.replace('hand-hidden', 'hand-visible'); }
-        function hideHandIfSelected() { document.getElementById('hand-area').classList.replace('hand-visible', 'hand-hidden'); }
+        function hideHandIfSelected() { document.getElementById('hand-area').classList.replace('hand-visible', 'hand-hidden'); handVisible = false; }
+        function goBackToPreviousPhoto() { if (photoHistoryStack.length > 0) selectPhoto(photoHistoryStack.pop()); }
+        function deleteCurrentTrip() { if (confirm("この記録を削除しますか？")) { delete userTrips[currentTrip]; localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips)); location.reload(); } }
     </script>
 </body>
 </html>
