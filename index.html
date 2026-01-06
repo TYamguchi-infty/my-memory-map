@@ -190,46 +190,65 @@
                     let targetFile = file;
                     const fileName = file.name.toLowerCase();
 
-                    // .heic または .heif 形式ならJPEGに変換
+                    // HEIC/HEIF変換処理 (iPhoneのメモリ対策)
                     if (fileName.endsWith('.heic') || fileName.endsWith('.heif')) {
                         try {
-                            const blob = await heic2any({ 
+                            // heic2anyにタイムアウト（5秒）の概念を擬似的に導入
+                            const conversionPromise = heic2any({ 
                                 blob: file, 
                                 toType: "image/jpeg", 
-                                quality: 0.7 
+                                quality: 0.1 // メモリ節約のため画質を大幅に下げる
                             });
-                            // 複数枚変換時は配列で返ることがあるため、最初の要素を取得
+                            
+                            const timeoutPromise = new Promise((_, reject) => 
+                                setTimeout(() => reject(new Error("Timeout")), 5000)
+                            );
+
+                            const blob = await Promise.race([conversionPromise, timeoutPromise]);
                             const resultBlob = Array.isArray(blob) ? blob[0] : blob;
-                            targetFile = new File([resultBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg"), { type: "image/jpeg" });
+                            targetFile = new File([resultBlob], fileName.replace(/\.(heic|heif)$/i, ".jpg"), { type: "image/jpeg" });
                         } catch (heicErr) {
-                            console.error("HEIF変換失敗、そのまま続行を試みます:", heicErr);
+                            console.error("変換に失敗またはタイムアウト:", heicErr);
+                            // 変換失敗時はこのファイルをスキップして次へ
+                            continue; 
                         }
                     }
 
+                    // 画像読み込み
                     const imgData = await new Promise((resolve, reject) => {
                         const reader = new FileReader();
-                        reader.onload = (e) => resolve(e.target.result);
-                        reader.onerror = (e) => reject(e);
+                        // 10秒経っても読み込めなければ強制終了
+                        const timer = setTimeout(() => reject(new Error("Read Timeout")), 10000);
+                        reader.onload = (e) => {
+                            clearTimeout(timer);
+                            resolve(e.target.result);
+                        };
+                        reader.onerror = () => {
+                            clearTimeout(timer);
+                            reject(new Error("Read Error"));
+                        };
                         reader.readAsDataURL(targetFile);
                     });
 
-                    // 位置情報の解析
+                    // 位置情報の解析 (ここでもエラーで止まらないようにする)
                     const coords = await new Promise((resolve) => {
-                        EXIF.getData(targetFile, function() {
-                            let lat = EXIF.getTag(this, "GPSLatitude");
-                            let lon = EXIF.getTag(this, "GPSLongitude");
-                            
-                            if (lat && lon) {
-                                const toD = (dms, ref) => {
-                                    let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
-                                    return (ref === "S" || ref === "W" ? res * -1 : res);
-                                };
-                                resolve([toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))]);
-                            } else {
-                                // 位置情報がない場合は東京近辺にランダム配置（フリーズ防止）
-                                resolve([35.6895 + (Math.random()*0.1), 139.6917 + (Math.random()*0.1)]); 
-                            }
-                        });
+                        try {
+                            EXIF.getData(targetFile, function() {
+                                let lat = EXIF.getTag(this, "GPSLatitude");
+                                let lon = EXIF.getTag(this, "GPSLongitude");
+                                if (lat && lon) {
+                                    const toD = (dms, ref) => {
+                                        let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
+                                        return (ref === "S" || ref === "W" ? res * -1 : res);
+                                    };
+                                    resolve([toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))]);
+                                } else {
+                                    resolve([35.68 + (Math.random()*0.1), 139.69 + (Math.random()*0.1)]); 
+                                }
+                            });
+                        } catch(e) {
+                            resolve([35.68, 139.69]); // 万が一の時も止まらない
+                        }
                     });
 
                     const gId = `user_${coords[0].toFixed(2)}_${coords[1].toFixed(2)}`;
@@ -241,20 +260,20 @@
                     processedCount++;
 
                 } catch (err) {
-                    console.error("ファイル処理エラー:", err);
+                    console.error("個別ファイル処理失敗:", err);
+                    // 1枚失敗してもループを回し続ける
                 }
             }
 
-            // すべての処理が完了
+            overlay.classList.add('view-hidden');
+
             if (processedCount > 0) {
                 localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
                 renderMarker(lastGroupId, userTrips[lastGroupId], true);
-                overlay.classList.add('view-hidden');
-                alert(`${processedCount}枚の写真を地図に追加しました！`);
+                alert(`${processedCount}枚追加しました`);
                 diveToTrip(lastGroupId);
             } else {
-                overlay.classList.add('view-hidden');
-                alert("写真の処理に失敗しました。ファイル形式を確認してください。");
+                alert("画像の読み込みができませんでした。写真の形式やサイズを変えて試してみてください。");
             }
         }
 
