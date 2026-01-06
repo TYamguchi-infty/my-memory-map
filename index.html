@@ -188,16 +188,28 @@
                 
                 try {
                     let targetFile = file;
+                    const fileName = file.name.toLowerCase();
 
-                    // HEIC形式ならJPEGに変換
-                    if (file.name.toLowerCase().endsWith('.heic')) {
-                        const blob = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.7 });
-                        targetFile = new File([blob], file.name.replace(/\.heic/i, ".jpg"), { type: "image/jpeg" });
+                    // .heic または .heif 形式ならJPEGに変換
+                    if (fileName.endsWith('.heic') || fileName.endsWith('.heif')) {
+                        try {
+                            const blob = await heic2any({ 
+                                blob: file, 
+                                toType: "image/jpeg", 
+                                quality: 0.7 
+                            });
+                            // 複数枚変換時は配列で返ることがあるため、最初の要素を取得
+                            const resultBlob = Array.isArray(blob) ? blob[0] : blob;
+                            targetFile = new File([resultBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg"), { type: "image/jpeg" });
+                        } catch (heicErr) {
+                            console.error("HEIF変換失敗、そのまま続行を試みます:", heicErr);
+                        }
                     }
 
-                    const imgData = await new Promise((resolve) => {
+                    const imgData = await new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onload = (e) => resolve(e.target.result);
+                        reader.onerror = (e) => reject(e);
                         reader.readAsDataURL(targetFile);
                     });
 
@@ -206,6 +218,7 @@
                         EXIF.getData(targetFile, function() {
                             let lat = EXIF.getTag(this, "GPSLatitude");
                             let lon = EXIF.getTag(this, "GPSLongitude");
+                            
                             if (lat && lon) {
                                 const toD = (dms, ref) => {
                                     let res = Number(dms[0]) + Number(dms[1])/60 + Number(dms[2])/3600;
@@ -213,7 +226,7 @@
                                 };
                                 resolve([toD(lat, EXIF.getTag(this, "GPSLatitudeRef")), toD(lon, EXIF.getTag(this, "GPSLongitudeRef"))]);
                             } else {
-                                // 位置情報がない場合はデフォルト（または現在地）
+                                // 位置情報がない場合は東京近辺にランダム配置（フリーズ防止）
                                 resolve([35.6895 + (Math.random()*0.1), 139.6917 + (Math.random()*0.1)]); 
                             }
                         });
@@ -237,10 +250,11 @@
                 localStorage.setItem('USER_TRIPS', JSON.stringify(userTrips));
                 renderMarker(lastGroupId, userTrips[lastGroupId], true);
                 overlay.classList.add('view-hidden');
+                alert(`${processedCount}枚の写真を地図に追加しました！`);
                 diveToTrip(lastGroupId);
             } else {
                 overlay.classList.add('view-hidden');
-                alert("写真の処理に失敗しました。");
+                alert("写真の処理に失敗しました。ファイル形式を確認してください。");
             }
         }
 
